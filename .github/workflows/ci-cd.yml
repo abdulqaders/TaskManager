@@ -1,0 +1,68 @@
+name: Docker CI/CD Pipeline
+
+on: [push]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: your_strong_password_here # REPLACE IN SECRETS
+          POSTGRES_DB: tasks
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 18
+
+    - name: Build Docker images
+      run: docker-compose build
+
+    - name: Run tests
+      run: |
+        docker-compose up -d
+        docker-compose exec backend npm install jest supertest --save-dev
+        docker-compose exec backend npx jest
+
+  deploy-prod:
+    needs: build-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }} # REPLACE IN SECRETS
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and push backend
+      run: |
+        docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-backend:latest ./backend
+        docker push ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-backend:latest
+
+    - name: Deploy to server
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.SSH_HOST }} # REPLACE IN SECRETS
+        username: ${{ secrets.SSH_USERNAME }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          docker-compose down
+          docker-compose pull
+          docker-compose up -d
